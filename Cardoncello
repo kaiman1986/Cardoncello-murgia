@@ -1,0 +1,116 @@
+import streamlit as st
+import pandas as pd
+import datetime
+import requests
+import json
+import os
+
+st.set_page_config(
+    page_title="Cardoncello Tracker Altamura",
+    page_icon="🍄",
+    layout="wide"
+)
+
+DATA_FILE = "ritrovamenti_cardoncelli.csv"
+
+def carica_dati():
+    if os.path.exists(DATA_FILE):
+        return pd.read_csv(DATA_FILE)
+    else:
+        return pd.DataFrame(columns=["Data", "Latitudine", "Longitudine", "Note", "Quantita"])
+
+def salva_dati(df):
+    df.to_csv(DATA_FILE, index=False)
+
+st.title("🍄 Cardoncello Tracker - Altamura")
+st.caption("App per i cercatori di funghi cardoncelli sulle Murge")
+
+menu = st.sidebar.radio("Navigazione", ["Meteo & Segnale Cardoncello", "Registra Spot GPS", "I Miei Spot Segreti"])
+
+# --- 1. METEO E ALGORITMO ---
+if menu == "Meteo & Segnale Cardoncello":
+    st.header("🌦️ Meteo Altamura in Tempo Reale")
+    
+    lat, lon = 40.8275, 16.5511
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,precipitation&daily=precipitation_sum&timezone=Europe/Rome"
+    
+    try:
+        res = requests.get(weather_url).json()
+        current = res.get("current", {})
+        daily = res.get("daily", {})
+        
+        temp = current.get('temperature_2m', '--')
+        hum = current.get('relative_humidity_2m', '--')
+        prec = current.get('precipitation', 0)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Temperatura", f"{temp} °C")
+        c2.metric("Umidità", f"{hum} %")
+        c3.metric("Pioggia Ora", f"{prec} mm")
+        
+        st.divider()
+        st.subheader("📊 Indice Probabilità Cardoncelli")
+        
+        # Algoritmo di calcolo
+        indice = 20
+        if isinstance(hum, (int, float)) and hum > 70:
+            indice += 40
+        if isinstance(temp, (int, float)) and 10 <= temp <= 20:
+            indice += 30
+            
+        pioggia_tot = sum(daily.get("precipitation_sum", [0])) if "precipitation_sum" in daily else 0
+        if pioggia_tot > 5:
+            indice += 10
+            
+        indice = min(indice, 100)
+        st.progress(indice / 100)
+        
+        if indice >= 75:
+            st.success(f"🔥 **CONDIZIONI OTTIMALI ({indice}%)!** Ottimo momento per cercare tra le ferule sulle Murge!")
+        elif indice >= 45:
+            st.warning(f"⚠️ **CONDIZIONI MODERATE ({indice}%)**. Il terreno è umido, vale la pena fare un giro nei soliti posti.")
+        else:
+            st.error(f"❄️ **CONDIZIONI SFAVOREVOLI ({indice}%)**. Terreno troppo secco o sbalzo termico insufficiente.")
+            
+    except Exception as e:
+        st.error("Errore nella connessione meteo.")
+
+# --- 2. REGISTRA SPOT ---
+elif menu == "Registra Spot GPS":
+    st.header("📍 Salva la Posizione")
+    st.info("💡 Suggerimento: Puoi usare le coordinate inviate da WhatsApp o Google Maps mentre sei sul posto.")
+    
+    with st.form("form_spot"):
+        c1, c2 = st.columns(2)
+        lat_in = c1.number_input("Latitudine", value=40.827500, format="%.6f")
+        lon_in = c2.number_input("Longitudine", value=16.551100, format="%.6f")
+        
+        data_in = st.date_input("Data", datetime.date.today())
+        quantita = st.slider("Quantità / Esemplari trovati", 1, 50, 5)
+        note_in = st.text_area("Note sul luogo (es. Sotto pianta di Ferula, Bosco di Cecibizzo):")
+        
+        if st.form_submit_button("💾 Salva Spot"):
+            df = carica_dati()
+            nuova_riga = pd.DataFrame([{
+                "Data": str(data_in),
+                "Latitudine": lat_in,
+                "Longitudine": lon_in,
+                "Note": note_in,
+                "Quantita": quantita
+            }])
+            df = pd.concat([df, nuova_riga], ignore_index=True)
+            salva_dati(df)
+            st.success("🎉 Spot salvato con successo!")
+
+# --- 3. I MIEI SPOT ---
+elif menu == "I Miei Spot Segreti":
+    st.header("🗺️ Mappa & Archivio dei Ritrovamenti")
+    df = carica_dati()
+    
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+        st.subheader("Mappa dei tuoi punti")
+        st.map(df.rename(columns={"Latitudine": "lat", "Longitudine": "lon"}))
+    else:
+        st.info("Nessuno spot salvato al momento.")
+
